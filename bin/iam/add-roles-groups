@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+
+# fail on error (turned off to remain running)
+# set -e
+
+# debug output
+# set -x
+
+# mac os = brew install coreutils for 'greadlink -f'
+# unless you have realpath installed already
+EXEC=$(realpath -L ${0#./})
+BASE="${EXEC%/*}"
+
+DATA_PATH="${BASE/bin/src}"
+DATA_POLICY_FILE="file://${DATA_PATH}/__PATH__.json"
+
+declare -a DATA
+
+function capitalise () {
+  local STR="$1"
+  # capitalise first character
+  echo $(tr a-z A-Z <<< ${STR:0:1})${STR:1}
+}
+
+function split_policy_name () {
+  local IFS=" "
+  local policy_name="$1"
+  local policy_list=()
+
+  # split name (camelcase), add spaces
+  policy_name="$(echo "$policy_name" | sed 's/\([A-Z]\)/ \1/g')"
+  # lowercase, add as array values
+  policy_list=($(echo "${policy_name# }" | tr '[:upper:]' '[:lower:]'))
+
+  echo "${policy_list[@]}"
+}
+
+function get_path_from_policy () {
+  local IFS=" "
+  local policy_name="$1"
+  local policy_list=()
+
+  policy_list=($(split_policy_name $policy_name))
+
+  # pluralise 'folder', format file policy name (folders/file-name)
+  echo "${policy_list[0]}s/${policy_list[1]}-${policy_list[2]}"
+}
+
+function get_policy_name () {
+  local policy_name="$1"
+  local policy_user="$2"
+  echo "$policy_name$(capitalise $policy_user)"
+}
+
+function get_policy_path () {
+  local policy_name="$1"
+  local policy_file=$(get_path_from_policy $policy_name)
+  echo "${DATA_POLICY_FILE/__PATH__/$policy_file}"
+}
+
+function get_policy_arn () {
+  local policy_preset="$1"
+  echo "arn:aws:iam::aws:policy/$policy_preset"
+}
+
+function attach_group_policy () {
+  local policy_name="$1"
+  local policy_arn="$(get_policy_arn $2)"
+
+  [[ ! -z "${policy_arn// }" ]] && aws iam attach-group-policy \
+    --group-name $policy_name --policy-arn $policy_arn
+}
+
+function attach_role_policy () {
+  local policy_user="$1"
+  local policy_arn="$(get_policy_arn $2)"
+
+  [[ ! -z "${policy_arn// }" ]] && aws iam attach-role-policy \
+    --role-name $policy_user --policy-arn $policy_arn
+}
+
+function make_group () {
+  local policy=("$@")
+
+  local policy_user="${policy[0]}"
+  local policy_preset="${policy[1]}"
+  local policy_name="${policy[2]}"
+  local policy_file="${policy[3]}"
+
+  # create group
+  aws iam create-group --group-name $policy_user
+
+  # attach policies, if present
+  [[ ! -z "$policy_preset" ]] && attach_group_policy $policy_user $policy_preset
+
+  # put custom policy
+  aws iam put-group-policy --group-name $policy_user \
+    --policy-name $policy_name --policy-document $policy_file
+
+  # show policies
+  aws iam list-group-policies --group-name $policy_user
+}
+
+function make_role () {
+  local policy=("$@")
+
+  local policy_user="${policy[0]}"
+  local policy_preset="${policy[1]}"
+  local policy_name="${policy[2]}"
+  local policy_file="${policy[3]}"
+
+  # create role
+  aws iam create-role --role-name $policy_user \
+    --assume-role-policy-document ${policy_file/-$policy_user/}
+
+  # attach policies, if present
+  [[ ! -z "$policy_preset" ]] && attach_role_policy $policy_user $policy_preset
+
+  # put custom policy
+  aws iam put-role-policy --role-name $policy_user \
+    --policy-name $policy_name --policy-document $policy_file
+
+  # show policies
+  aws iam list-role-policies --role-name $policy_user
+}
+
+function main () {
+  local IFS="|"
+  local list=("$@")
+  local policy=()
+
+  # get callback
+  local callback_index=$((${#list[@]} - 1))
+  local callback=${list[$callback_index]}
+
+  # delete callback
+  unset list[callback_index]
+
+  # iterate list options
+  for index in "${!list[@]}"; do
+    item="${list[$index]}"
+
+    # read item as '|' delimited array
+    read policy_user policy_preset policy_name <<< "$item"
+
+    # capture policy options
+    policy_name="$(get_policy_name $policy_name $policy_user)"
+    policy_file="$(get_policy_path $policy_name)"
+
+    # set options
+    policy=("$policy_user" "$policy_preset" "$policy_name" "$policy_file")
+
+    echo "$callback> $item"
+    echo "$callback> ${policy[@]}"
+
+    # init callback
+    echo "$($callback ${policy[@]})"
+  done
+}
+
+# create groups
+DATA=( "staff|ReadOnlyAccess|GroupPolicy" "admin|AdministratorAccess|GroupPolicy" "development|PowerUserAccess|GroupPolicy" )
+main ${DATA[@]} make_group
+
+# create roles
+DATA=( "support|job-function/SupportUser|RolePolicy" "service||RolePolicy" "publisher||RolePolicy" )
+main ${DATA[@]} make_role
+
+# set +x

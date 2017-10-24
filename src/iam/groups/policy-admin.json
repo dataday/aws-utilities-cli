@@ -1,0 +1,14 @@
+{
+    "Statement": [
+        {
+            "Sid": "AssumeRolePrincipalAdmin",
+            "Action": "sts:AssumeRole",
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:iam::*:role/publisher",
+              "arn:aws:iam::*:role/service"
+            ]
+        }
+    ],
+    "Version": "2012-10-17"
+}
